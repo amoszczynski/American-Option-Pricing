@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from scipy import interpolate
 import datetime as dt
+from dateutil.relativedelta import relativedelta
 
 # risk free rate dataframe
 rfr = pd.read_csv("daily-treasury-rates.csv", index_col=0)
@@ -17,7 +18,13 @@ def _flat_r(N):
 
 def _curve_r(N, T, calc_day):
     """Interpolates risk free rate using treasury rates"""
-    rf = rfr.loc[calc_day]
+
+    try:
+        rf = rfr.loc[calc_day]
+    except:
+        previous_date = rfr[rfr.index < calc_day].index.max()
+        rf = rfr.loc[previous_date]
+
     y = np.array(rf.values) / 100
     x = rf.index.tolist()
 
@@ -163,3 +170,80 @@ def derive_IV(S0, K, calc_day, expiry, payoff, rf, div_info, mid, tol=0.001):
         i += 1
 
     return mvol
+
+
+def calculate_delta(quote, opt_type, pct_change):
+    original_price = american_option(
+        quote["active_underlying_price"],
+        quote["strike"],
+        quote["quote_date"],
+        quote["expiration"],
+        quote["implied_volatility"],
+        opt_type,
+        "curve",
+        [0.003556, 0.25, time_to_div(quote["quote_date"])],
+    )
+
+    # recalculate with new price
+    new_price = american_option(
+        quote["active_underlying_price"] * (1 + pct_change),
+        quote["strike"],
+        quote["quote_date"],
+        quote["expiration"],
+        quote["implied_volatility"],
+        opt_type,
+        "curve",
+        [0.003556, 0.25, time_to_div(quote["quote_date"])],
+    )
+
+    # Calculate Delta
+    delta_S0 = quote["active_underlying_price"] * pct_change
+    delta = (new_price - original_price) / delta_S0
+
+    return delta
+
+
+def calculate_gamma(quote, opt_type, pct_change, delta_pct):
+    # Calculate Delta at the original stock price
+    quote_inc = quote.copy()
+    quote_inc["active_underlying_price"] *= 1 + pct_change
+    inc = calculate_delta(quote_inc, opt_type, delta_pct)
+
+    quote_dec = quote.copy()
+    quote_dec["active_underlying_price"] *= 1 - pct_change
+    dec = calculate_delta(quote_dec, opt_type, delta_pct)
+
+    # Calculate Gamma
+    delta_S0 = quote["active_underlying_price"] * pct_change
+    gamma = (inc - dec) / (2 * delta_S0)
+
+    return gamma
+
+
+def calculate_vega(quote, opt_type, abs_change):
+    original_price = american_option(
+        quote["active_underlying_price"],
+        quote["strike"],
+        quote["quote_date"],
+        quote["expiration"],
+        quote["implied_volatility"],
+        opt_type,
+        "curve",
+        [0.003556, 0.25, time_to_div(quote["quote_date"])],
+    )
+
+    new_price = american_option(
+        quote["active_underlying_price"],
+        quote["strike"],
+        quote["quote_date"],
+        quote["expiration"],
+        quote["implied_volatility"] + (abs_change),
+        opt_type,
+        "curve",
+        [0.003556, 0.25, time_to_div(quote["quote_date"])],
+    )
+
+    # Calculate Vega
+    vega = ((new_price - original_price) / abs_change) / 100
+
+    return vega
